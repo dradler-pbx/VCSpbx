@@ -604,7 +604,6 @@ class Source(Component):
         self.junctions['outlet_A'].set_values(mdot=self.mdot, p=self.p, h=self.h)
 
 
-
 class Sink(Component):
     def __init__(self, id: str, system: object, mdot=None, p=None, h=None):
         super().__init__(id=id, system=system)
@@ -622,3 +621,98 @@ class Sink(Component):
 
     def calc(self):
         pass
+
+
+class HeatExchanger(Component):
+    def __init__(self, id: str, system: object, UA: float):
+        super().__init__(id=id, system=system)
+        self.UA = UA
+
+        self.mdotA = None
+        self.TA_i = None
+        self.TA_o = None
+        self.TB_i = None
+        self.TB_o = None
+        self.mdotB = None
+        self.mediumA = None
+        self.mediumB = None
+
+        self.cpA = None
+        self.cpB = None
+
+        self.junctions['inlet_B'] = None
+        self.junctions['outlet_B'] = None
+
+    def initialize(self):
+        self.TA_i = self.junctions['inlet_A'].get_temperature()
+        self.mdotA = self.junctions['inlet_A'].get_massflow()
+        self.TB_i = self.junctions['inlet_B'].get_temperature()
+        self.mdotB = self.junctions['inlet_B'].get_massflow()
+
+        self.TA_o = self.TB_i
+        self.TB_o = self.TA_i
+
+        self.mediumA = self.junctions['inlet_A'].medium
+        self.mediumB = self.junctions['inlet_B'].medium
+
+    def model(self, x):
+        # x = [TA_o, TB_o]
+        # check for the hot side temperature
+        if self.TA_i > self.TB_i:
+            Thi = self.TA_i
+            Tho = x[0]
+            Tci = self.TB_i
+            Tco = x[1]
+        else:
+            Thi = self.TB_i
+            Tho = x[1]
+            Tci = self.TA_i
+            Tco = x[0]
+
+        LMTD = LMTD_calc(Thi, Tho, Tci, Tco)
+        Qdot = self.UA * LMTD
+
+        f = np.zeros(2)
+        if self.TA_i > self.TB_i:
+            f[0] = self.mdotA * self.cpA * (self.TA_i - x[0]) - Qdot
+            f[1] = self.mdotB * self.cpB * (self.TB_i - x[1]) + Qdot
+
+        else:
+            f[0] = self.mdotA * self.cpA * (self.TA_i - x[0]) + Qdot
+            f[1] = self.mdotB * self.cpB * (self.TB_i - x[1]) - Qdot
+
+        return f
+
+    def calc(self):
+        self.TA_i = self.junctions['inlet_A'].get_temperature()
+        self.mdotA = self.junctions['inlet_A'].get_massflow()
+        self.TB_i = self.junctions['inlet_B'].get_temperature()
+        self.mdotB = self.junctions['inlet_B'].get_massflow()
+        self.pA = self.junctions['inlet_A'].get_pressure()
+        self.pB = self.junctions['inlet_B'].get_pressure()
+
+        self.cpA = CPPSI('CPMASS', 'T', self.TA_i, 'P', self.pA, self.mediumA)
+        self.cpB = CPPSI('CPMASS', 'T', self.TB_i, 'P', self.pB, self.mediumB)
+
+        x = np.zeros(2)
+        x[0] = self.TA_o
+        x[1] = self.TB_o
+
+        x = fsolve(self.model, x0=x)
+
+        self.TA_o = x[0]
+        self.TB_o = x[1]
+
+        hA_o = CPPSI('H', 'T', self.TA_o, 'P', self.pA, self.mediumA)
+        hB_o = CPPSI('H', 'T', self.TB_o, 'P', self.pB, self.mediumB)
+
+        self.junctions['outlet_A'].set_values(h=hA_o)
+        self.junctions['outlet_B'].set_values(h=hB_o)
+
+        return
+
+    def get_function_residual(self):
+        x = np.zeros(2)
+        x[0] = self.TA_o
+        x[1] = self.TB_o
+        return self.model(x)
