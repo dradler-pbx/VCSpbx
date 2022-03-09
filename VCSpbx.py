@@ -77,6 +77,11 @@ class System:
                 return False
 
             old_enthalpies = new_enthalpies.copy()
+        # Helper
+            for junc in self.junctions:
+                print([junc.id, junc.T, junc.h])
+            print('--')
+
         self.residual_enthalpy = abs_delta
 
         for comp in self.components:
@@ -92,6 +97,7 @@ class System:
                 print('Pressure: {:2f}bar'.format(junc.p/1e5))
                 print('Temperature: {:2f}°C'.format(junc.T-273.15))
                 print('Enthalpy: {:2f}J/kg'.format(junc.h))
+                print('Massflow: {:2f}kg/s'.format(junc.mdot))
                 print('---')
 
         return True
@@ -165,8 +171,7 @@ class Junction:
             self.h = h
 
         self.T = CPPSI('T', 'P', self.p, 'H', self.h, self.medium)
-        if self.id=='ihx_evap':
-            print(self.T)
+
         self.s = CPPSI('S', 'P', self.p, 'H', self.h, self.medium)
 
         try:
@@ -334,8 +339,9 @@ class Condenser(Component):
             hout = CPPSI('H', 'P', self.p, 'Q', 0, self.medium)
         else:
             hout = CPPSI('H', 'P', self.p, 'T', self.TC-self.dTSC, self.medium)
+        mdot = self.junctions['inlet_A'].get_massflow()
 
-        self.junctions['outlet_A'].set_values(p=self.p, h=hout)
+        self.junctions['outlet_A'].set_values(p=self.p, h=hout, mdot=mdot)
         self.junctions['inlet_A'].set_values(p=self.p)
 
     def set_air_parameters(self, T_air: float = None, mdot: float = None):
@@ -398,6 +404,9 @@ class Evaporator(Component):
         mR = self.junctions['inlet_A'].get_massflow()
         ref = self.junctions['inlet_A'].medium
         SL = self.junctions['inlet_B'].medium
+
+        # print('---EVAP---')
+        # print(self.junctions['inlet_A'].get_temperature())
 
         # Boundaries for fsolve calculation to not cause the logaritmic mean temperature to generate NaN values (neg. logarithm)
         # The refrigerants oulet temperature must not be higher than the coolants inlet temperature:
@@ -471,7 +480,9 @@ class Evaporator(Component):
         Tout = self.T0 + self.superheat
         hout = CPPSI('H', 'T', Tout, 'P', self.p, self.junctions['inlet_A'].medium)
         self.junctions['outlet_A'].set_values(p=self.p, h=hout, mdot=self.junctions['inlet_A'].get_massflow())
-        self.junctions['inlet_A'].set_values(p=self.p)
+        hSL2 = CPPSI('H', 'T', self.TSL2, 'P', 1e5, self.junctions['inlet_B'].medium)
+        # self.junctions['inlet_A'].set_values(p=self.p)
+        self.junctions['outlet_B'].set_values(h=hSL2, mdot=self.junctions['inlet_B'].get_massflow())
 
     def get_function_residual(self):
         x = np.zeros(5)
@@ -559,9 +570,13 @@ class IHX(Component):
         pB_out = self.junctions['inlet_B'].get_pressure()
         hA_out = CPPSI('H', 'T', self.TA_out, 'P', pA_out, self.medium)
         hB_out = CPPSI('H', 'T', self.TB_out, 'P', pB_out, self.medium)
+        mdot = self.junctions['inlet_A'].get_massflow()
 
-        self.junctions['outlet_A'].set_values(p=pA_out, h=hA_out)
-        self.junctions['outlet_B'].set_values(p=pB_out, h=hB_out)
+        self.junctions['outlet_A'].set_values(p=pA_out, h=hA_out, mdot=mdot)
+        self.junctions['outlet_B'].set_values(p=pB_out, h=hB_out, mdot=mdot)
+        # print('---IHX---')
+        print(self.TA_out, self.TB_out)
+        # print(self.junctions['outlet_A'].get_temperature(), self.junctions['outlet_B'].get_temperature())
 
     def get_function_residual(self):
         x = np.zeros(2)

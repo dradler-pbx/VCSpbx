@@ -3,14 +3,14 @@ import numpy as np
 from CoolProp.CoolProp import PropsSI as CPPSI
 
 # parameter setting
-cpr_speed = 1800.0
+cpr_speed = 2400.0
 T_amb = 30. + 273.15
 ref = 'R290'
 sl = 'INCOMP::MEG[0.5]'
-h_in_sl = CPPSI('H', 'P', 1e5, 'T', 273.15 - 5.0, sl)
+h_in_sl = CPPSI('H', 'P', 1e5, 'T', 273.15 - 1.85, sl)
 mdot_SL = 0.25
 p_SL = 1e5
-superheat = 5.0
+superheat = 4.0
 
 mdot_init = 4e-3
 pc_init = 14e5
@@ -26,9 +26,9 @@ h_out_SL_init = CPPSI('H', 'P', 1e5, 'T', 273.15 - 10.0, sl)
 
 system = vcs.System(id='system', tolerance=100.)
 cpr = vcs.Compressor_efficiency(id='cpr', system=system, etaS=0.65, etaV=0.9, stroke=33e-6, speed=cpr_speed)
-cond = vcs.Condenser(id='cond', system=system, k=[450., 450., 450.], area=1.0, subcooling=0.1, T_air_in=T_amb, mdot_air_in=0.5)
+cond = vcs.Condenser(id='cond', system=system, k=[450., 450., 450.], area=1., subcooling=0.1, T_air_in=T_amb, mdot_air_in=0.56)
 ihx = vcs.IHX(id='ihx', system=system, UA=2.3)
-evap = vcs.Evaporator(id='evap', system=system, k=[420., 420.], area=1.0, superheat=superheat, boundary_switch=True, limit_temp=True)
+evap = vcs.Evaporator(id='evap', system=system, k=[420., 420.], area=1., superheat=superheat, boundary_switch=True, limit_temp=True)
 srcSL = vcs.Source(id='srcSL', system=system, mdot=mdot_SL, p=p_SL, h=h_in_sl)
 snkSL = vcs.Sink(id='snkSL', system=system)
 
