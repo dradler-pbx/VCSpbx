@@ -2,6 +2,8 @@ import numpy as np
 from scipy.optimize import fsolve
 from CoolProp.CoolProp import PropsSI as CPPSI
 import CoolProp.CoolProp as CP
+from fmipp.export.FMIAdapterV2 import FMIAdapterV2
+import warnings
 
 
 def LMTD_calc(Thi, Tho, Tci, Tco):
@@ -21,6 +23,7 @@ def LMTD_calc(Thi, Tho, Tci, Tco):
         LMTD = 1e-6
     return LMTD
 
+
 def dhCOND(TC, medium):
     Tcrit = CPPSI('TCRIT', medium)
     if TC > Tcrit:
@@ -30,8 +33,8 @@ def dhCOND(TC, medium):
     return dh
 
 
-class System:
-    def __init__(self, id: str, tolerance: float, n_max: int = 100, fun_tol: float = 0.1):
+class System(FMIAdapterV2):
+    def __init__(self, id: str, tolerance: float, activate_FMU_export: bool = False, fmu_name: str = 'fmu_export', fmu_dict: dict = None, n_max: int = 100, fun_tol: float = 0.1):
         self.id = id
         self.components = []
         self.junctions = []
@@ -43,6 +46,9 @@ class System:
 
         self.residual_enthalpy = None
         self.residual_functions = {}
+
+        if activate_FMU_export:
+            self.initializeFMUExport(fmu_dict, fmu_name)
 
     def run(self, full_output=False):
         # initialize the system and all components
@@ -119,6 +125,53 @@ class System:
     def get_junction_enthalpies(self):
         return np.array([junc.get_enthalpy() for junc in self.junctions])
 
+    def initializeFMUExport(self, fmu_dict, fmu_name):
+        if not fmu_dict:
+            raise ValueError
+
+        self.fmu_dict = fmu_dict
+
+        self.fmu_name = fmu_name
+
+        # check the keys of the fmu_dict
+        if not ('Parameters' in fmu_dict.keys()):
+            raise ValueError('Parameters not defined in fmu_dict')
+
+        if not ('Inputs' in fmu_dict.keys()):
+            raise ValueError('Inputs not defined in fmu_dict')
+
+        if not ('Outputs' in fmu_dict.keys()):
+            raise ValueError('Outputs not defined in fmu_dict')
+
+        # get the fmu inputs
+        self.defineRealInputs(list(fmu_dict['Inputs'].keys()))
+
+        # get the fmu outputs
+        self.defineRealOutputs(list(fmu_dict['Outputs'].keys()))
+
+        # get the fmu parameters
+        self.defineRealParameters(list(fmu_dict['Parameters'].keys()))
+
+        # initialize the values
+        self.initialize()
+
+    def doStep(self, currentCommunicationPoint, communicationStepSize):
+        # make the sumulation step
+
+        # first get the new inputs and ingest them into the system
+        inputs = self.getRealInputValues()
+        for n, v in inputs:
+            self.fmu_dict['Inputs'][n](v)  # in fmu_dict, all call functions for the model are linked to input names
+
+        # run the model
+        self.run()
+
+        # get the outputs and hand them over to the FMU
+        outputs = dict()
+        for key in self.fmu_dict['Outputs']:
+            outputs[key] = self.fmu_dict['Outputs'][key]()
+        self.setRealOutputValues(outputs)
+
 
 class Component:
     def __init__(self, id: str, system: object):
@@ -144,6 +197,7 @@ class Component:
 
     def get_function_residual(self):
         return 0.0
+
 
 class Junction:
     def __init__(self, id: str, system: object, medium: str, upstream_component:object, upstream_id: str, downstream_component: object, downstream_id: str, mdot_init: float, p_init: float, h_init: float):
@@ -203,6 +257,7 @@ class Junction:
         h_v = CPPSI('H', 'P', self.p, 'Q', 1, self.medium)
         return (self.h - h_l)/(h_v-h_l)
 
+
 class Compressor_efficiency(Component):
     def __init__(self, id: str, system: object, etaS: float, etaV:float, stroke: float, speed: float):
         super().__init__(id, system)
@@ -216,6 +271,8 @@ class Compressor_efficiency(Component):
         self.Tin = np.nan
         self.pin = np.nan
         self.pout = np.nan
+
+        self.Pel = None
 
     def initialize(self):
         pass
@@ -231,11 +288,17 @@ class Compressor_efficiency(Component):
         hin = CPPSI("H", "T", self.Tin, "P", self.pin, "R290")  # inlet enthalpy
         sin = CPPSI("S", "T", self.Tin, "P", self.pin, "R290")  # inlet entropy
         houtS = CPPSI("H", "S", sin, "P", self.pout, "R290")  # enthalpy at outlet under isentropic conditions
-        Pel = mdot * (houtS - hin) / self.etaS  # power input
-        hout = Pel / mdot + hin  # real outlet enthalpy
+        self.Pel = mdot * (houtS - hin) / self.etaS  # power input
+        hout = self.Pel / mdot + hin  # real outlet enthalpy
         Tout = CPPSI("T", "P", self.pout, "H", hout, "R290")  # outlet temperature
 
         self.junctions['outlet_A'].set_values(mdot=mdot, h=hout)
+
+    def set_speed(self, speed):
+        self.speed = speed
+
+    def get_power(self):
+        return self.Pel
 
 
 class Condenser(Component):
@@ -364,6 +427,16 @@ class Condenser(Component):
         Qdot = self.junctions['inlet_A'].get_massflow() * (self.junctions['outlet_A'].get_enthalpy() - self.junctions['inlet_A'].get_enthalpy())
         res[0:6] = res[0:6]/Qdot
         return res
+
+    def set_air_temp(self, T_air:float):
+        self.T_air_in = T_air
+
+    def set_air_mdot(self, mdot_air:float):
+        self.mdot_air = mdot_air
+
+    def get_outlet_temp(self):
+        return self.TAo_subcool
+
 
 class Evaporator(Component):
     def __init__(self, id: str, system: object, k: iter, area: float, superheat: float, boundary_switch: bool, limit_temp: bool):
@@ -498,6 +571,7 @@ class Evaporator(Component):
         res[0:4] = res[0:4]/Qdot
         return res
 
+
 class IHX(Component):
     def __init__(self, id: str, system: object, UA: float):
         super().__init__(id=id, system=system)
@@ -603,6 +677,11 @@ class Source(Component):
     def calc(self):
         self.junctions['outlet_A'].set_values(mdot=self.mdot, p=self.p, h=self.h)
 
+    def set_enthalpy(self, h):
+        self.h = h
+
+    def set_mdot(self, mdot):
+        self.mdot = mdot
 
 class Sink(Component):
     def __init__(self, id: str, system: object, mdot=None, p=None, h=None):
@@ -621,6 +700,10 @@ class Sink(Component):
 
     def calc(self):
         pass
+
+    def get_temperature(self):
+        T = CPPSI('T', 'P', self.p, 'H', self.h, self.junctions['inlet_A'].medium)
+        return T
 
 
 class HeatExchanger(Component):
@@ -716,3 +799,6 @@ class HeatExchanger(Component):
         x[0] = self.TA_o
         x[1] = self.TB_o
         return self.model(x)
+
+
+
