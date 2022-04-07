@@ -3,7 +3,7 @@ import numpy as np
 from CoolProp.CoolProp import PropsSI as CPPSI
 
 # parameter setting
-cpr_speed = 2400.0
+cpr_speed = 2700.0
 T_amb = 30. + 273.15
 ref = 'R290'
 sl = 'INCOMP::MEG[0.5]'
@@ -26,7 +26,7 @@ h_out_SL_init = CPPSI('H', 'P', 1e5, 'T', 273.15 - 10.0, sl)
 
 system = vcs.System(id='system', tolerance=100.)
 cpr = vcs.Compressor_efficiency(id='cpr', system=system, etaS=0.65, etaV=0.9, stroke=33e-6, speed=cpr_speed)
-cond = vcs.Condenser(id='cond', system=system, k=[450., 450., 450.], area=1., subcooling=0.1, T_air_in=T_amb, mdot_air_in=0.56)
+cond = vcs.Condenser(id='cond', system=system, k=[450., 450., 450.], area=1., subcooling=0.1, T_air_in=T_amb, mdot_air_in=0.3)
 ihx = vcs.IHX(id='ihx', system=system, UA=2.3)
 evap = vcs.Evaporator(id='evap', system=system, k=[420., 420.], area=1., superheat=superheat, boundary_switch=True, limit_temp=True)
 srcSL = vcs.Source(id='srcSL', system=system, mdot=mdot_SL, p=p_SL, h=h_in_sl)

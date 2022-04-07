@@ -27,7 +27,7 @@ h_out_SL_init = CPPSI('H', 'P', 1e5, 'T', 273.15 - 10.0, sl)
 system = vcs.System(id='system', tolerance=1e-4)
 cpr = vcs.Compressor_efficiency(id='cpr', system=system, etaS=0.65, etaV=0.9, stroke=33e-6, speed=cpr_speed)
 cond = vcs.Condenser(id='cond', system=system, k=[450., 450., 450.], area=1., subcooling=0.1, T_air_in=T_amb, mdot_air_in=0.56)
-ihx = vcs.IHX(id='ihx', system=system, UA=2.3)
+ihx = vcs.IHX(id='ihx', system=system, UA=1.3)
 evap = vcs.Evaporator(id='evap', system=system, k=[420., 420.], area=1., superheat=superheat, boundary_switch=True, limit_temp=True)
 srcSL = vcs.Source(id='srcSL', system=system, mdot=mdot_SL, p=p_SL, h=h_in_sl)
 snkSL = vcs.Sink(id='snkSL', system=system)
@@ -45,12 +45,14 @@ evap_snkSL = vcs.Junction(id='evap_snkSL', system=system, medium=sl, upstream_co
 fmu_name = 'test_vcs_FMU'
 
 fmu_dict = {'Inputs':
-                {'n_cpr': cpr.set_speed,
-                 'T_amb': cond.set_air_temp,
-                 'mdot_cond': cond.set_air_mdot,
-                 'h_SL': srcSL.set_enthalpy,
-                 'mdot_SL': srcSL.set_mdot},
+                {'n_cpr': 'cpr.set_speed',
+                 'T_amb': 'cond.set_air_temp',
+                 'mdot_cond': 'cond.set_air_mdot',
+                 'h_SL': 'srcSL.set_enthalpy',
+                 'mdot_SL': 'srcSL.set_mdot'},
             'Outputs':
-                {'T_aircond_out': cond.get_outlet_temp,
-                 'T_SL_out': snkSL.get_temperature,
-                 'P_el': cpr.get_power}}
+                {'T_aircond_out': 'cond.get_outlet_temp',
+                 'T_SL_out': 'snkSL.get_temperature',
+                 'P_el': 'cpr.get_power'}}
+
+createFMU()

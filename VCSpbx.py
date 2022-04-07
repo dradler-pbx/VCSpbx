@@ -4,6 +4,8 @@ from CoolProp.CoolProp import PropsSI as CPPSI
 import CoolProp.CoolProp as CP
 from fmipp.export.FMIAdapterV2 import FMIAdapterV2
 import warnings
+import matplotlib.pyplot as plt
+from imageio import imread
 
 
 def LMTD_calc(Thi, Tho, Tci, Tco):
@@ -33,8 +35,8 @@ def dhCOND(TC, medium):
     return dh
 
 
-class System(FMIAdapterV2):
-    def __init__(self, id: str, tolerance: float, activate_FMU_export: bool = False, fmu_name: str = 'fmu_export', fmu_dict: dict = None, n_max: int = 100, fun_tol: float = 0.1):
+class System():
+    def __init__(self, id: str, tolerance: float, n_max: int = 100, fun_tol: float = 0.1):
         self.id = id
         self.components = []
         self.junctions = []
@@ -47,8 +49,6 @@ class System(FMIAdapterV2):
         self.residual_enthalpy = None
         self.residual_functions = {}
 
-        if activate_FMU_export:
-            self.initializeFMUExport(fmu_dict, fmu_name)
 
     def run(self, full_output=False):
         # initialize the system and all components
@@ -84,9 +84,9 @@ class System(FMIAdapterV2):
 
             old_enthalpies = new_enthalpies.copy()
         # Helper
-            for junc in self.junctions:
-                print([junc.id, junc.T, junc.h])
-            print('--')
+        #     for junc in self.junctions:
+                # print([junc.id, junc.T, junc.h])
+            # print('--')
 
         self.residual_enthalpy = abs_delta
 
@@ -125,52 +125,35 @@ class System(FMIAdapterV2):
     def get_junction_enthalpies(self):
         return np.array([junc.get_enthalpy() for junc in self.junctions])
 
-    def initializeFMUExport(self, fmu_dict, fmu_name):
-        if not fmu_dict:
-            raise ValueError
+    def plotCycle(self, dict: dict, cycle_img_path: str):
+        # TODO check if cycle image is a file
 
-        self.fmu_dict = fmu_dict
+        # initiate the subplots
+        plt.subplot(121)
 
-        self.fmu_name = fmu_name
+        # create the picture (left) side of the plot
+        cycle_image = imread(cycle_img_path)
+        plt.imshow(cycle_image, interpolation='bilinear')
+        plt.axis('off')
 
-        # check the keys of the fmu_dict
-        if not ('Parameters' in fmu_dict.keys()):
-            raise ValueError('Parameters not defined in fmu_dict')
+        # now run through dict and write the texts into the drawing
+        # first the junctions
+        for junc in dict['cycle']['junctions']:
+            comp = dict['cycle']['junctions'][junc]
+            # retrieve plot string from component
+            text = comp['component'].get_plot_string()
+            # plot the text
+            plt.text(comp['position'][0], comp['position'][1], text, va=comp['va'], ha=comp['ha'], fontsize=8)
 
-        if not ('Inputs' in fmu_dict.keys()):
-            raise ValueError('Inputs not defined in fmu_dict')
+        # now the special text
+        for special in dict['cycle']['special']:
+            comp = dict['cycle']['special'][special]
+            plt.text(comp['position'][0], comp['position'][1], comp['text'], va=comp['va'], ha=comp['ha'], fontsize=8)
 
-        if not ('Outputs' in fmu_dict.keys()):
-            raise ValueError('Outputs not defined in fmu_dict')
+        # create the top right side (Ts-diagram)
+        plt.subplot(222)
 
-        # get the fmu inputs
-        self.defineRealInputs(list(fmu_dict['Inputs'].keys()))
 
-        # get the fmu outputs
-        self.defineRealOutputs(list(fmu_dict['Outputs'].keys()))
-
-        # get the fmu parameters
-        self.defineRealParameters(list(fmu_dict['Parameters'].keys()))
-
-        # initialize the values
-        self.initialize()
-
-    def doStep(self, currentCommunicationPoint, communicationStepSize):
-        # make the sumulation step
-
-        # first get the new inputs and ingest them into the system
-        inputs = self.getRealInputValues()
-        for n, v in inputs:
-            self.fmu_dict['Inputs'][n](v)  # in fmu_dict, all call functions for the model are linked to input names
-
-        # run the model
-        self.run()
-
-        # get the outputs and hand them over to the FMU
-        outputs = dict()
-        for key in self.fmu_dict['Outputs']:
-            outputs[key] = self.fmu_dict['Outputs'][key]()
-        self.setRealOutputValues(outputs)
 
 
 class Component:
@@ -183,6 +166,8 @@ class Component:
         self.parameters = {}
 
         self.junctions = {'inlet_A': None, 'outlet_A': None}
+
+        self.statechange = None
 
     def print_parameters(self):
         print(self.parameters)
@@ -198,6 +183,11 @@ class Component:
     def get_function_residual(self):
         return 0.0
 
+    def get_Ts_data(self, npoints: int):
+        pass
+
+    def get_ph_data(self, npoints: int):
+        pass
 
 class Junction:
     def __init__(self, id: str, system: object, medium: str, upstream_component:object, upstream_id: str, downstream_component: object, downstream_id: str, mdot_init: float, p_init: float, h_init: float):
@@ -257,22 +247,31 @@ class Junction:
         h_v = CPPSI('H', 'P', self.p, 'Q', 1, self.medium)
         return (self.h - h_l)/(h_v-h_l)
 
+    def get_plot_string(self):
+        text = 'T: {T:.2f} °C\np: {p:.2f} bar\nh: {h:.0f} J/kg\nmdot: {mdot:.2f} g/s'.format(
+            T=self.get_temperature() - 273.15,
+            p=self.get_pressure() * 1e-5,
+            h=self.get_enthalpy(),
+            mdot=self.get_massflow() * 1e3)
+        return text
 
 class Compressor_efficiency(Component):
-    def __init__(self, id: str, system: object, etaS: float, etaV:float, stroke: float, speed: float):
+    def __init__(self, id: str, system: object, etaS: float, etaV:float, stroke: float, speed: float, etaEL:float = 1.):
         super().__init__(id, system)
         self.etaS = etaS
         self.etaV = etaV
+        self.etaEL = etaEL
         self.stroke = stroke
         self.speed = speed
 
-        self.parameters = {'id': id, 'etaS': etaS, 'etaV': etaV, 'speed': speed}
+        self.parameters = {'id': id, 'etaS': etaS, 'etaV': etaV, 'speed': speed, 'etaEL': etaEL}
 
         self.Tin = np.nan
         self.pin = np.nan
         self.pout = np.nan
 
         self.Pel = None
+        self.P_compression = None
 
     def initialize(self):
         pass
@@ -288,9 +287,11 @@ class Compressor_efficiency(Component):
         hin = CPPSI("H", "T", self.Tin, "P", self.pin, "R290")  # inlet enthalpy
         sin = CPPSI("S", "T", self.Tin, "P", self.pin, "R290")  # inlet entropy
         houtS = CPPSI("H", "S", sin, "P", self.pout, "R290")  # enthalpy at outlet under isentropic conditions
-        self.Pel = mdot * (houtS - hin) / self.etaS  # power input
-        hout = self.Pel / mdot + hin  # real outlet enthalpy
+        self.P_compression = mdot * (houtS - hin) / self.etaS  # power input
+        hout = self.P_compression / mdot + hin  # real outlet enthalpy
         Tout = CPPSI("T", "P", self.pout, "H", hout, "R290")  # outlet temperature
+
+        self.Pel = self.P_compression/self.etaEL
 
         self.junctions['outlet_A'].set_values(mdot=mdot, h=hout)
 
@@ -300,6 +301,23 @@ class Compressor_efficiency(Component):
     def get_power(self):
         return self.Pel
 
+    def get_Ts_data(self, npoints: int):
+        T, s = np.zeros((2, npoints))
+        Tin = self.junctions['inlet_A'].get_temperature()
+        Tout = self.junctions['outlet_A'].get_temperature()
+        sin = self.junctions['inlet_A'].get_entropy()
+        T = np.linspace(Tin, Tout, npoints)
+        s.fill(sin)
+        return [T, s]
+
+    def get_ph_data(self, npoints: int):
+        pin = self.junctions['inlet_A'].get_pressure()
+        pout = self.junctions['outlet_A'].get_pressure()
+        hin = self.junctions['inlet_A'].get_enthalpy()
+        hout = self.junctions['outlet_A'].get_enthalpy()
+        p = np.linspace(pin, pout, npoints)
+        h = np.linspace(hin, hout, npoints)
+        return [p, h]
 
 class Condenser(Component):
     def __init__(self, id: str, system: object, k: iter, area: float, subcooling: float, T_air_in: float, mdot_air_in: float):
@@ -436,6 +454,14 @@ class Condenser(Component):
 
     def get_outlet_temp(self):
         return self.TAo_subcool
+
+    def get_ph_data(self, npoints: int):
+        p = np.zeros(npoints)
+        p.fill(self.p)
+
+        hin = self.junctions['inlet_A'].get_enthalpy()
+        h_
+        h = np.linspace()
 
 
 class Evaporator(Component):
@@ -649,7 +675,7 @@ class IHX(Component):
         self.junctions['outlet_A'].set_values(p=pA_out, h=hA_out, mdot=mdot)
         self.junctions['outlet_B'].set_values(p=pB_out, h=hB_out, mdot=mdot)
         # print('---IHX---')
-        print(self.TA_out, self.TB_out)
+        # print(self.TA_out, self.TB_out)
         # print(self.junctions['outlet_A'].get_temperature(), self.junctions['outlet_B'].get_temperature())
 
     def get_function_residual(self):
@@ -683,6 +709,7 @@ class Source(Component):
     def set_mdot(self, mdot):
         self.mdot = mdot
 
+
 class Sink(Component):
     def __init__(self, id: str, system: object, mdot=None, p=None, h=None):
         super().__init__(id=id, system=system)
@@ -699,7 +726,10 @@ class Sink(Component):
         pass
 
     def calc(self):
-        pass
+        j = self.junctions['inlet_A']
+        self.mdot = j.get_massflow()
+        self.p = j.get_pressure()
+        self.h = j.get_enthalpy()
 
     def get_temperature(self):
         T = CPPSI('T', 'P', self.p, 'H', self.h, self.junctions['inlet_A'].medium)
@@ -725,6 +755,7 @@ class HeatExchanger(Component):
 
         self.junctions['inlet_B'] = None
         self.junctions['outlet_B'] = None
+
 
     def initialize(self):
         self.TA_i = self.junctions['inlet_A'].get_temperature()
@@ -801,4 +832,46 @@ class HeatExchanger(Component):
         return self.model(x)
 
 
+class FMUExportClass(FMIAdapterV2):
+    def __init__(self, currentCommunicationPoint, system: object, fmu_dict: dict):
+        self.system = system
+        self.fmu_dict = fmu_dict
 
+        # check the keys of the fmu_dict
+        if not ('Parameters' in fmu_dict.keys()):
+            raise ValueError('Parameters not defined in fmu_dict')
+
+        if not ('Inputs' in fmu_dict.keys()):
+            raise ValueError('Inputs not defined in fmu_dict')
+
+        if not ('Outputs' in fmu_dict.keys()):
+            raise ValueError('Outputs not defined in fmu_dict')
+
+        # get the fmu inputs
+        self.defineRealInputs(list(fmu_dict['Inputs'].keys()))
+
+        # get the fmu outputs
+        self.defineRealOutputs(list(fmu_dict['Outputs'].keys()))
+
+        # get the fmu parameters
+        self.defineRealParameters(list(fmu_dict['Parameters'].keys()))
+
+        self.system.initialize()
+
+    def doStep(self, currentCommunicationPoint, communicationStepSize):
+        # make the sumulation step
+        # first get the new inputs and ingest them into the system
+        inputs = self.getRealInputValues()
+        for key, value in inputs:
+            evalstr = 'self.system.' + self.fmu_dict['Inputs'][key]
+            eval(evalstr)(value)
+
+        # run the model
+        self.system.run()
+
+        # get the outputs and hand them over to the FMU
+        outputs = dict()
+        for key in self.fmu_dict['Outputs']:
+            evalstr = 'self.system.' + self.fmu_dict['Outputs'][key]
+            outputs[key] = eval(evalstr)()
+        self.setRealOutputValues(outputs)
