@@ -255,6 +255,9 @@ class Junction:
             mdot=self.get_massflow() * 1e3)
         return text
 
+    def get_medium(self):
+        return self.medium
+
 class Compressor_efficiency(Component):
     def __init__(self, id: str, system: object, etaS: float, etaV:float, stroke: float, speed: float, etaEL:float = 1.):
         super().__init__(id, system)
@@ -318,6 +321,79 @@ class Compressor_efficiency(Component):
         p = np.linspace(pin, pout, npoints)
         h = np.linspace(hin, hout, npoints)
         return [p, h]
+
+
+class Compressor_MasterfluxAlpine(Component):
+    def __init__(self, id: str, system: object, speed: float):
+        super().__init__(id, system)
+        self.speed = speed
+        self.working_parameters = np.zeros(9)
+        self.k = None
+
+        # compressor parameters
+        self.stroke = 18.243 * 2 * 1.0E-6  # in m3
+        self.RPM_min = 1800
+        self.RPM_max = 6500
+
+        # model parameters
+        self.model_params = np.array([
+            [-2.200E-11, 3.049E-07, -3.360E-04],    # A
+            [7.783E-10, -1.091E-05, 1.747E-02],     # B
+            [-5.444E-09, 7.744E-05, 7.802E-01],     # C
+            [3.717E-11, -3.726E-07, 4.017E-04],     # D
+            [-5.538E-11, -1.256E-06, 2.598E-02],    # E
+            [-8.713E-11, 9.877E-06, 9.401E-01],     # F
+            [1.004E-09, -2.179E-06, 7.339E-02],     # G
+            [-1.220E-08, -2.571E-05, -1.103E+00],   # H
+            [1.444E-07, 5.382E-05, -3.375E+00]      # I
+        ])
+
+    def initialize(self):
+        self.medium = self.junctions['inlet_A'].get_medium()
+
+    def calc(self):
+        self.Tin = self.junctions['inlet_A'].get_temperature()
+        self.pin = self.junctions['inlet_A'].get_pressure()
+        self.pout = self.junctions['outlet_A'].get_pressure()
+        self.p_ratio = self.pout / self.pin
+        self.rho_in = CPPSI("D", "P", self.pin, "T", self.Tin, self.medium)
+        hin = self.junctions['inlet_A'].get_enthalpy()
+
+        # update specific heat ratio
+        cp = CPPSI('CPMASS', 'P', self.pin, 'T', self.Tin, self.medium)
+        cv = CPPSI('CVMASS', 'P', self.pin, 'T', self.Tin, self.medium)
+        self.k = cp/cv
+
+        # update efficiencies
+        self.update_efficiencies()
+
+        Pel_ideal = self.stroke * self.speed / 30 * np.pi * (self.pout * self.p_ratio ** (-1/self.k) - self.pin)
+        self.Pel = Pel_ideal * self.etaP
+
+        mdot_ideal = self.rho_in * self.stroke * (self.speed / 60)
+        mdot = mdot_ideal * self.etaV
+
+        hout_ideal = hin + self.Pel / mdot
+        Tout_ideal = CPPSI("T", "P", self.pout, "H", hout_ideal, self.medium)
+        Tout = Tout_ideal + self.deltaTD
+        hout = CPPSI("H", "P", self.pout, "T", Tout, self.medium)
+
+        self.junctions['outlet_A'].set_values(mdot=mdot, h=hout)
+
+    def update_efficiencies(self):
+        # parameters for compressor model
+        speed_array = np.array([self.speed**2, self.speed, 1])
+        self.working_parameters = np.dot(self.model_params, speed_array)
+        pout_bar = self.pout * 1.E-5
+        self.etaP = 1 / (self.working_parameters[0] * pout_bar**2 + self.working_parameters[1] * pout_bar + self.working_parameters[2])
+        self.etaV = 1 / (self.working_parameters[3] * self.p_ratio**2 + self.working_parameters[4] * self.p_ratio + self.working_parameters[5])
+        self.deltaTD = self.working_parameters[6] * self.p_ratio**2 + self.working_parameters[7] * self.p_ratio + self.working_parameters[8]
+
+    def set_speed(self, speed):
+        self.speed = speed
+
+    def get_power(self):
+        return self.Pel
 
 class Condenser(Component):
     def __init__(self, id: str, system: object, k: iter, area: float, subcooling: float, T_air_in: float, mdot_air_in: float):
